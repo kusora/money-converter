@@ -9,29 +9,33 @@ const (
 	UNIT_SHI  = "拾"
 	UNIT_BAI  = "佰"
 	UNIT_QIAN = "仟"
+
 	UNIT_WAN  = "万"
 	UNIT_YI   = "亿"
+	UNIT_YUAN = "元"
 
 	UNIT_FEN  = "分"
 	UNIT_JIAO = "角"
-	UNIT_YUAN = "元"
 
 	POSTFIX = "整"
 	PREFIX  = "￥"
 
-	POS_UNIT_YUAN = 1
-	POS_UNIT_WAN  = 5
-	POS_UINT_YI   = 9
-	MAX_POS       = 18
+	BASE_PART_LENTH = 4
+	MAX_POS         = 18
 )
 
-var unit_mapper = map[int]string{
+var low_unit_mapper = map[int]string{
 	1: "",
 	2: UNIT_SHI,
 	3: UNIT_BAI,
 	4: UNIT_QIAN,
-	5: UNIT_WAN,
-	9: UNIT_YI,
+}
+
+var high_unit_mapper = map[int]string{
+	0: UNIT_YUAN,
+	1: UNIT_WAN,
+	2: UNIT_YI,
+	3: UNIT_WAN, // 万亿
 }
 
 var num_mapper = map[int]string{
@@ -47,7 +51,7 @@ var num_mapper = map[int]string{
 	0: "零",
 }
 
-func Arab2Chinsese(num int64) (string, error) {
+func Arab2Chinsese2(num int64) (string, error) {
 	// 最大值设为1000万亿
 	numStr := strconv.FormatInt(num, 10)
 
@@ -55,30 +59,48 @@ func Arab2Chinsese(num int64) (string, error) {
 		return "", errors.New("too large number")
 	}
 
-	result := ""
-	if len(numStr) < 3 {
-		fenPart, _, err := parseUnitYuan(numStr)
-		if err != nil {
-			return "", err
+	pieces := make([]string, 0, 4)
+	whole := numStr
+
+	for {
+		if len(whole) > 2 {
+			length := 4
+			if (len(whole)-2)%BASE_PART_LENTH != 0 {
+				length = (len(whole) - 2) % BASE_PART_LENTH
+			}
+			pieces = append(pieces, whole[0:length])
+			whole = whole[length:]
+		} else {
+			pieces = append(pieces, whole)
+			break
 		}
-		result = fenPart
-	} else {
-		yuanPart, _, withZeroTail, err := parse(numStr[:len(numStr)-2])
-		if err != nil {
-			return "", err
+	}
+
+	var result, before string
+	for index, piece := range pieces {
+		if index != len(pieces)-1 {
+			currentValue := baseParse(piece)
+			if currentValue != "" && withZero(before, piece) {
+				result = result + num_mapper[0] + currentValue + high_unit_mapper[len(pieces)-index-2]
+			} else if currentValue != "" || index != len(pieces)-3 {
+				result = result + currentValue + high_unit_mapper[len(pieces)-index-2]
+			}
+		} else {
+			currentValue := lowParse(piece)
+			if currentValue != "" && withZero(before, piece) {
+				result = result + num_mapper[0] + currentValue
+			} else {
+				result = result + currentValue
+			}
+			break
 		}
-		fenPart, fenZeroHead, err := parseUnitYuan(numStr[len(numStr)-2:])
-		if err != nil {
-			return "", err
-		}
-		result = yuanPart + UNIT_YUAN
-		if fenPart != "" && (withZeroTail == true || fenZeroHead == true) {
-			result = result + num_mapper[0]
-		}
-		result = result + fenPart
+		before = piece
 	}
 	result = PREFIX + result
-	if numStr[len(numStr)-1] == '0' {
+
+	if result == "" {
+		result = num_mapper[0] + UNIT_YUAN + POSTFIX
+	} else if numStr[len(numStr)-1] == '0' {
 		result = result + POSTFIX
 	}
 
@@ -86,119 +108,48 @@ func Arab2Chinsese(num int64) (string, error) {
 
 }
 
-func getUnit(pos int) (string, error) {
-	if pos > MAX_POS {
-		return "", errors.New("too large amount")
-	}
+func lowParse(value string) string {
+	switch len(value) {
+	case 0:
+		return ""
+	case 1:
+		return num_mapper[int(value[0]-'0')] + UNIT_FEN
+	default:
+		result := ""
+		if value[0] != '0' {
+			result = num_mapper[int(value[0]-'0')] + UNIT_JIAO
+		}
 
-	value, ok := unit_mapper[pos]
-	if !ok {
-		if pos > POS_UINT_YI {
-			return getUnit(pos - POS_UINT_YI + 1)
+		if value[1] != '0' {
+			result = result + num_mapper[int(value[1]-'0')] + UNIT_FEN
 		}
-		if pos > POS_UNIT_WAN {
-			return getUnit(pos - POS_UNIT_WAN + 1)
-		}
+		return result
 	}
-	return value, nil
 }
 
-func parseUnitYuan(value string) (string, bool, error) {
-	result := ""
-	withZeroHead := false
-	if len(value) == 0 {
-		return "", true, nil
-	}
-
-	if len(value) == 1 {
-		return num_mapper[int(value[0]-'0')] + UNIT_FEN, withZeroHead, nil
-	}
-
-	if value[0] != '0' {
-		result = num_mapper[int(value[0]-'0')] + UNIT_JIAO
-	} else {
-		withZeroHead = true
-	}
-
-	if value[1] != '0' {
-		result = result + num_mapper[int(value[1]-'0')] + UNIT_FEN
-	}
-	return result, withZeroHead, nil
-}
-
-func parse(input string) (result string, withZeroHead bool, withZeroTail bool, err error) {
-
-	value, err := trimHead(input)
-	if err != nil {
-		return "", false, false, err
-	}
-	if len(value) == 0 {
-		return "", true, true, nil
-	}
-	result = ""
-	withZeroHead = value[0] == '0'
-	withZeroTail = value[len(value)-1] == '0'
-	// 判断是不是大于yi,
-	if len(value) > POS_UINT_YI {
-		yiValue, _, yiZeroTail, newerr := parse(value[:len(value)-POS_UINT_YI+1])
-		if newerr != nil {
-			err = newerr
-			return
-		}
-		result = yiValue + unit_mapper[POS_UINT_YI]
-		yuanValue, yuanZeroHead, _, newerr := parse(value[len(value)-POS_UINT_YI+1:])
-		if newerr != nil {
-			err = newerr
-			return
-		}
-		if yuanValue != "" && (yiZeroTail == true || yuanZeroHead == true) {
-			result = result + num_mapper[0]
-		}
-		result = result + yuanValue
-		return
-	}
-	if len(value) > POS_UNIT_WAN {
-		wanValue, _, wanZeroTail, newerr := parse(value[:len(value)-POS_UNIT_WAN+1])
-		if newerr != nil {
-			err = newerr
-			return
-		}
-		result = wanValue + unit_mapper[POS_UNIT_WAN]
-		yuanValue, yuanZeroHead, _, newerr := parse(value[len(value)-POS_UNIT_WAN+1:])
-		if newerr != nil {
-			err = newerr
-			return
-		}
-		if yuanValue != "" && (wanZeroTail == true || yuanZeroHead == true) {
-			result = result + num_mapper[0]
-		}
-		result = result + yuanValue
-		return
-	}
-	if len(value) > 0 {
-		result = ""
-		zeroBefore := true
-		for i := 1; i <= len(value); i++ {
-			if value[len(value)-i] != '0' {
-				result = num_mapper[int(value[len(value)-i]-'0')] + unit_mapper[i] + result
-				zeroBefore = false
-			} else {
-				if zeroBefore == false {
-					result = num_mapper[0] + result
-					zeroBefore = true
-				}
+// 转换小于10000的数字， 属于基础函数
+func baseParse(input string) string {
+	result, zero := "", ""
+	lastValue := '0'
+	for index, value := range input {
+		if value != '0' {
+			result = result + zero + num_mapper[int(value-'0')] + low_unit_mapper[len(input)-index]
+			lastValue, zero = value, ""
+		} else {
+			if lastValue != '0' {
+				zero = num_mapper[0]
 			}
+			lastValue = value
 		}
-		return
 	}
-	return
+	return result
 }
 
-func trimHead(input string) (string, error) {
-	for i := 0; i < len(input); i++ {
-		if input[i] != '0' {
-			return input[i:], nil
-		}
+func withZero(before string, after string) bool {
+	if len(before) == 0 || len(after) == 0 {
+		return false
+	} else if before[len(before)-1] == '0' || after[0] == '0' {
+		return true
 	}
-	return "", nil
+	return false
 }
